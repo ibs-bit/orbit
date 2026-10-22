@@ -78,7 +78,7 @@ enum ArchiveEngine {
         let out = OutputPaths.unique(OutputPaths.directory(for: first).appendingPathComponent(baseName + "." + format.ext))
         let names = sources.map(\.lastPathComponent)
         switch format.id {
-        case "zip": try runProcess(zip, ["-r", "-y", "-q", "-X", "--", out.path] + names, cwd: parent)
+        case "zip": try runProcess(zip, ["-r", "-y", "-q", "-X", out.path] + names.map { "./" + $0 }, cwd: parent)
         case "tar": try runProcess(tar, ["-cf", out.path, "-C", parent.path, "--"] + names)
         case "tgz": try runProcess(tar, ["-czf", out.path, "-C", parent.path, "--"] + names)
         case "tbz2": try runProcess(tar, ["-cjf", out.path, "-C", parent.path, "--"] + names)
@@ -103,7 +103,7 @@ enum ArchiveEngine {
         let out = OutputPaths.unique(OutputPaths.directory(for: url).appendingPathComponent(OutputPaths.baseName(of: url) + "." + target.ext))
         let names = contents.map(\.lastPathComponent)
         switch target.id {
-        case "zip": try runProcess(zip, ["-r", "-y", "-q", "-X", "--", out.path] + names, cwd: extracted)
+        case "zip": try runProcess(zip, ["-r", "-y", "-q", "-X", out.path] + names.map { "./" + $0 }, cwd: extracted)
         case "tgz": try runProcess(tar, ["-czf", out.path, "-C", extracted.path, "--"] + names)
         case "txz": try runProcess(tar, ["-cJf", out.path, "-C", extracted.path, "--"] + names)
         case "tar": try runProcess(tar, ["-cf", out.path, "-C", extracted.path, "--"] + names)
