@@ -235,15 +235,22 @@ enum Tools {
         case "pdf.merge":
             return JobResult(try PDFEngine.merge(urls))
         case "video.merge", "audio.merge":
-            let list = try OutputPaths.temporaryDirectory().appendingPathComponent("list.txt")
-            let body = urls.map { "file '\($0.path.replacingOccurrences(of: "'", with: "'\\''"))'" }.joined(separator: "\n")
-            try body.write(to: list, atomically: true, encoding: .utf8)
+            // Link each input under a generated name so the concat list never carries user-controlled text.
+            let tmp = try OutputPaths.temporaryDirectory()
+            var lines: [String] = []
+            for (i, url) in urls.enumerated() {
+                let name = "input\(i).\(url.pathExtension.lowercased().filter { $0.isLetter || $0.isNumber })"
+                try FileManager.default.createSymbolicLink(at: tmp.appendingPathComponent(name), withDestinationURL: url)
+                lines.append("file '\(name)'")
+            }
+            let list = tmp.appendingPathComponent("list.txt")
+            try lines.joined(separator: "\n").write(to: list, atomically: true, encoding: .utf8)
             let ext = tool.id == "video.merge" ? "mp4" : "m4a"
             let out = OutputPaths.unique(OutputPaths.directory(for: urls[0]).appendingPathComponent("Joined." + ext))
             let args = tool.id == "video.merge"
                 ? ["-c:v", "libx264", "-preset", "faster", "-crf", "22", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k"]
                 : ["-vn", "-c:a", "aac", "-b:a", "192k"]
-            try MediaEngine.ffmpeg(input: list, args: args, output: out, job: nil, inputArgs: ["-f", "concat", "-safe", "0"])
+            try MediaEngine.ffmpeg(input: list, args: args, output: out, job: nil, inputArgs: ["-f", "concat"])
             return JobResult(out)
         default:
             throw OrbitError("Unknown tool \(tool.id).")

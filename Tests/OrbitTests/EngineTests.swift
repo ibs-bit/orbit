@@ -125,6 +125,31 @@ final class EngineTests: XCTestCase {
         XCTAssertTrue(try String(contentsOf: html).contains("<th>name</th>"))
     }
 
+    func testHTMLImportIsOffline() throws {
+        let html = """
+        <html><head><link rel=stylesheet href="http://evil.test/a.css"><script>alert(1)</script></head>
+        <body><h1>Hi</h1><img src="http://evil.test/x.png"><p style="background:url(http://evil.test/b.png)">Body <a href="http://evil.test">link</a></p></body></html>
+        """
+        let parsed = try DocumentEngine.offlineHTML(html)
+        XCTAssertTrue(parsed.string.contains("Hi"))
+        XCTAssertTrue(parsed.string.contains("Body"))
+        XCTAssertFalse(parsed.string.contains("alert"))
+        var hasLink = false
+        parsed.enumerateAttribute(.link, in: NSRange(location: 0, length: parsed.length)) { v, _, _ in if v != nil { hasLink = true } }
+        XCTAssertFalse(hasLink)
+    }
+
+    func testEscapingSymlinksAreRemovedAfterExtraction() throws {
+        let root = dir.appendingPathComponent("root", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("bad"), withDestinationURL: URL(fileURLWithPath: "/etc"))
+        try "x".write(to: root.appendingPathComponent("inside.txt"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("good"), withDestinationURL: root.appendingPathComponent("inside.txt"))
+        try ArchiveEngine.removeEscapingSymlinks(in: root)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("bad").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("good").path))
+    }
+
     func testSubtitles() throws {
         let srt = dir.appendingPathComponent("s.srt")
         try "1\n00:00:01,000 --> 00:00:02,500\nHello\n\n2\n00:00:03,000 --> 00:00:04,000\nWorld\nagain\n".write(to: srt, atomically: true, encoding: .utf8)

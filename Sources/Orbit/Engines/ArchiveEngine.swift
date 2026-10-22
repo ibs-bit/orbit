@@ -2,7 +2,6 @@ import Foundation
 
 enum ArchiveEngine {
     private static let tar = "/usr/bin/tar"
-    private static let ditto = "/usr/bin/ditto"
     private static let zip = "/usr/bin/zip"
 
     static func isSingleFileCompression(_ url: URL) -> Bool {
@@ -22,14 +21,26 @@ enum ArchiveEngine {
             try decompress(tool, url, to: dest.appendingPathComponent(outName))
             return dest
         }
-        if ext == "zip" {
-            try runProcess(ditto, ["-x", "-k", url.path, dest.path])
-        } else if ext == "7z", let seven = Backends.path(for: .sevenZip) {
-            try runProcess(seven, ["x", "-y", "-o\(dest.path)", url.path])
+        if ext == "7z", let seven = Backends.path(for: .sevenZip) {
+            // -snl- stores symlinks as plain files so an archive can't link outside the folder.
+            try runProcess(seven, ["x", "-y", "-snl-", "-o\(dest.path)", "--", url.path])
         } else {
+            // bsdtar reads zip/tar/7z/rar and refuses ".." and extraction through symlinks.
             try runProcess(tar, ["-xf", url.path, "-C", dest.path])
         }
+        try removeEscapingSymlinks(in: dest)
         return dest
+    }
+
+    /// Deletes any symlink inside `root` that resolves outside it.
+    static func removeEscapingSymlinks(in root: URL) throws {
+        let rootPath = root.resolvingSymlinksInPath().path
+        guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey], options: []) else { return }
+        for case let item as URL in e {
+            guard (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true else { continue }
+            let target = item.resolvingSymlinksInPath().path
+            if !(target + "/").hasPrefix(rootPath + "/") { try FileManager.default.removeItem(at: item) }
+        }
     }
 
     private static func decompress(_ tool: String, _ input: URL, to output: URL) throws {
@@ -67,14 +78,14 @@ enum ArchiveEngine {
         let out = OutputPaths.unique(OutputPaths.directory(for: first).appendingPathComponent(baseName + "." + format.ext))
         let names = sources.map(\.lastPathComponent)
         switch format.id {
-        case "zip": try runProcess(zip, ["-r", "-y", "-q", "-X", out.path] + names, cwd: parent)
-        case "tar": try runProcess(tar, ["-cf", out.path, "-C", parent.path] + names)
-        case "tgz": try runProcess(tar, ["-czf", out.path, "-C", parent.path] + names)
-        case "tbz2": try runProcess(tar, ["-cjf", out.path, "-C", parent.path] + names)
-        case "txz": try runProcess(tar, ["-cJf", out.path, "-C", parent.path] + names)
+        case "zip": try runProcess(zip, ["-r", "-y", "-q", "-X", "--", out.path] + names, cwd: parent)
+        case "tar": try runProcess(tar, ["-cf", out.path, "-C", parent.path, "--"] + names)
+        case "tgz": try runProcess(tar, ["-czf", out.path, "-C", parent.path, "--"] + names)
+        case "tbz2": try runProcess(tar, ["-cjf", out.path, "-C", parent.path, "--"] + names)
+        case "txz": try runProcess(tar, ["-cJf", out.path, "-C", parent.path, "--"] + names)
         case "7z":
             guard let seven = Backends.path(for: .sevenZip) else { throw MissingBackendError(backend: .sevenZip) }
-            try runProcess(seven, ["a", "-y", out.path] + names, cwd: parent)
+            try runProcess(seven, ["a", "-y", "--", out.path] + names, cwd: parent)
         default: throw OrbitError("Unsupported archive format \(format.name).")
         }
         return out
@@ -92,13 +103,13 @@ enum ArchiveEngine {
         let out = OutputPaths.unique(OutputPaths.directory(for: url).appendingPathComponent(OutputPaths.baseName(of: url) + "." + target.ext))
         let names = contents.map(\.lastPathComponent)
         switch target.id {
-        case "zip": try runProcess(zip, ["-r", "-y", "-q", "-X", out.path] + names, cwd: extracted)
-        case "tgz": try runProcess(tar, ["-czf", out.path, "-C", extracted.path] + names)
-        case "txz": try runProcess(tar, ["-cJf", out.path, "-C", extracted.path] + names)
-        case "tar": try runProcess(tar, ["-cf", out.path, "-C", extracted.path] + names)
+        case "zip": try runProcess(zip, ["-r", "-y", "-q", "-X", "--", out.path] + names, cwd: extracted)
+        case "tgz": try runProcess(tar, ["-czf", out.path, "-C", extracted.path, "--"] + names)
+        case "txz": try runProcess(tar, ["-cJf", out.path, "-C", extracted.path, "--"] + names)
+        case "tar": try runProcess(tar, ["-cf", out.path, "-C", extracted.path, "--"] + names)
         case "7z":
             guard let seven = Backends.path(for: .sevenZip) else { throw MissingBackendError(backend: .sevenZip) }
-            try runProcess(seven, ["a", "-y", out.path] + names, cwd: extracted)
+            try runProcess(seven, ["a", "-y", "--", out.path] + names, cwd: extracted)
         default: throw OrbitError("Unsupported archive format \(target.name).")
         }
         return out

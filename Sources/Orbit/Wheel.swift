@@ -106,7 +106,8 @@ final class WheelController {
         let panel = self.panel ?? WheelPanel(contentRect: NSRect(x: 0, y: 0, width: size, height: size))
         let view = self.view ?? WheelView(frame: NSRect(x: 0, y: 0, width: size, height: size))
         if self.panel == nil {
-            panel.contentView = view
+            view.autoresizingMask = [.width, .height]
+            panel.effectView.addSubview(view)
             view.controller = self
             self.panel = panel
             self.view = view
@@ -227,17 +228,26 @@ final class WheelPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
+    let effectView: NSVisualEffectView
+
     init(contentRect: NSRect) {
+        effectView = NSVisualEffectView(frame: NSRect(origin: .zero, size: contentRect.size))
         super.init(contentRect: contentRect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isReleasedWhenClosed = false
         isFloatingPanel = true
         level = .popUpMenu
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = false
+        hasShadow = true
         ignoresMouseEvents = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         acceptsMouseMovedEvents = true
+        effectView.material = .hudWindow
+        effectView.blendingMode = .behindWindow
+        effectView.state = .active
+        effectView.wantsLayer = true
+        effectView.autoresizingMask = [.width, .height]
+        contentView = effectView
     }
 }
 
@@ -254,12 +264,12 @@ final class WheelView: NSView {
     private var fileIcon: NSImage?
     private var fileLabel = ""
 
-    var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
+    var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true; refreshMask() } } }
 
     private let hubRadius: CGFloat = 50
     private let innerRadius: CGFloat = 58
     private let outerRadius: CGFloat = 170
-    private let gapDegrees: CGFloat = 2.2
+    private let gapDegrees: CGFloat = 2.6
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -281,17 +291,20 @@ final class WheelView: NSView {
             fileLabel = files.count == 1 ? first.lastPathComponent : "\(files.count) items"
         }
         needsDisplay = true
+        refreshMask()
     }
 
     func animateIn() {
-        guard let layer else { return }
+        guard let layer = window?.contentView?.layer else { return }
         layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         layer.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        let anim = CABasicAnimation(keyPath: "transform.scale")
-        anim.fromValue = 0.82
+        let anim = CASpringAnimation(keyPath: "transform.scale")
+        anim.fromValue = 0.86
         anim.toValue = 1
-        anim.duration = 0.18
-        anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        anim.damping = 18
+        anim.stiffness = 320
+        anim.mass = 0.9
+        anim.duration = anim.settlingDuration
         layer.add(anim, forKey: "appear")
     }
 
@@ -310,20 +323,48 @@ final class WheelView: NSView {
         return min(idx, items.count - 1)
     }
 
+    // MARK: Glass shape
+
+    /// The visible glass: every segment plus the hub, with the gaps cut out.
+    private func shapePath() -> NSBezierPath {
+        let path = NSBezierPath()
+        for i in items.indices {
+            path.append(segmentPath(index: i, inner: innerRadius, outer: hovered == i ? outerRadius + 10 : outerRadius))
+        }
+        path.append(NSBezierPath(ovalIn: NSRect(x: center.x - hubRadius, y: center.y - hubRadius, width: hubRadius * 2, height: hubRadius * 2)))
+        return path
+    }
+
+    /// Masks the blur behind the window to the wheel's shape.
+    private func refreshMask() {
+        guard let panel = window as? WheelPanel else { return }
+        let size = bounds.size
+        let path = shapePath()
+        let mask = NSImage(size: size, flipped: false) { _ in
+            NSColor.black.setFill()
+            path.fill()
+            return true
+        }
+        panel.effectView.maskImage = mask
+        DispatchQueue.main.async { [weak self] in self?.window?.invalidateShadow() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshMask()
+    }
+
     // MARK: Drawing
 
+    private var isDark: Bool { effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+
     override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        ctx.saveGState()
-        let shadow = NSShadow()
-        shadow.shadowBlurRadius = 14
-        shadow.shadowOffset = NSSize(width: 0, height: -3)
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.45)
-        shadow.set()
+        let tile = NSColor.labelColor.withAlphaComponent(isDark ? 0.07 : 0.05)
+        let edge = NSColor.labelColor.withAlphaComponent(isDark ? 0.16 : 0.12)
+        let gloss = NSColor.white.withAlphaComponent(isDark ? 0.10 : 0.35)
 
         if items.isEmpty {
-            drawHub(message: "No \(modeTitle.lowercased()) for this selection")
-            ctx.restoreGState()
+            drawHub(message: "No \(modeTitle.lowercased()) for this selection", tile: tile, edge: edge)
             return
         }
 
@@ -331,25 +372,35 @@ final class WheelView: NSView {
             let isHovered = hovered == i
             let outer = isHovered ? outerRadius + 10 : outerRadius
             let path = segmentPath(index: i, inner: innerRadius, outer: outer)
-            let fill: NSColor
             if isHovered {
-                fill = item.isAvailable ? NSColor.controlAccentColor : NSColor.systemOrange.withAlphaComponent(0.85)
+                let accent = item.isAvailable ? NSColor.controlAccentColor : NSColor.systemOrange
+                accent.withAlphaComponent(0.92).setFill()
+                path.fill()
+                // Soft inner glow on the active tile.
+                let glow = NSGradient(starting: NSColor.white.withAlphaComponent(0.28), ending: NSColor.white.withAlphaComponent(0))!
+                glow.draw(in: path, relativeCenterPosition: NSPoint(x: 0, y: 0.6))
             } else {
-                fill = NSColor(calibratedWhite: 0.13, alpha: 0.94)
+                tile.setFill()
+                path.fill()
             }
-            fill.setFill()
-            path.fill()
-        }
-        ctx.restoreGState()
-
-        for (i, item) in items.enumerated() {
-            let path = segmentPath(index: i, inner: innerRadius, outer: hovered == i ? outerRadius + 10 : outerRadius)
-            NSColor.white.withAlphaComponent(0.09).setStroke()
+            // Hairline edge + a top-lit highlight that reads as glass.
             path.lineWidth = 1
+            edge.setStroke()
             path.stroke()
-            drawLabel(item, index: i, hovered: hovered == i)
+            drawGloss(index: i, outer: outer, color: gloss)
+            drawLabel(item, index: i, hovered: isHovered)
         }
-        drawHub(message: nil)
+        drawHub(message: nil, tile: tile, edge: edge)
+    }
+
+    private func drawGloss(index i: Int, outer: CGFloat, color: NSColor) {
+        let a0 = CGFloat(i) * step + gapDegrees / 2
+        let a1 = CGFloat(i + 1) * step - gapDegrees / 2
+        let arc = NSBezierPath()
+        arc.appendArc(withCenter: center, radius: outer - 0.75, startAngle: 90 - a0, endAngle: 90 - a1, clockwise: true)
+        arc.lineWidth = 1.5
+        color.setStroke()
+        arc.stroke()
     }
 
     private func segmentPath(index i: Int, inner: CGFloat, outer: CGFloat) -> NSBezierPath {
@@ -367,11 +418,12 @@ final class WheelView: NSView {
         let r = (innerRadius + outerRadius) / 2 + 6
         let pos = NSPoint(x: center.x + sin(mid) * r, y: center.y + cos(mid) * r)
         let available = item.isAvailable
-        let alpha: CGFloat = available ? 1 : 0.45
+        let primary: NSColor = hovered ? .white : (available ? .labelColor : .tertiaryLabelColor)
+        let secondary: NSColor = hovered ? NSColor.white.withAlphaComponent(0.85) : .secondaryLabelColor
 
         if let img = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 20, weight: .medium)) {
-            let tinted = img.tinted(NSColor.white.withAlphaComponent(alpha))
+            let tinted = img.tinted(primary)
             let s = NSSize(width: 24, height: 24)
             tinted.draw(in: NSRect(x: pos.x - s.width / 2, y: pos.y + 8, width: s.width, height: s.height),
                         from: .zero, operation: .sourceOver, fraction: 1)
@@ -382,19 +434,19 @@ final class WheelView: NSView {
         para.lineBreakMode = .byWordWrapping
         let title = NSMutableAttributedString(string: item.title, attributes: [
             .font: NSFont.systemFont(ofSize: 11.5, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(alpha),
+            .foregroundColor: primary,
             .paragraphStyle: para,
         ])
         if let missing = item.missingBackend {
             title.append(NSAttributedString(string: "\nneeds \(missing.displayName)", attributes: [
                 .font: NSFont.systemFont(ofSize: 9, weight: .medium),
-                .foregroundColor: NSColor.systemOrange,
+                .foregroundColor: hovered ? NSColor.white : NSColor.systemOrange,
                 .paragraphStyle: para,
             ]))
         } else if let sub = item.subtitle {
             title.append(NSAttributedString(string: "\n" + sub, attributes: [
                 .font: NSFont.systemFont(ofSize: 9.5, weight: .regular),
-                .foregroundColor: NSColor.white.withAlphaComponent(hovered ? 0.9 : 0.55),
+                .foregroundColor: secondary,
                 .paragraphStyle: para,
             ]))
         }
@@ -402,18 +454,19 @@ final class WheelView: NSView {
         title.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 
-    private func drawHub(message: String?) {
+    private func drawHub(message: String?, tile: NSColor, edge: NSColor) {
         let hub = NSBezierPath(ovalIn: NSRect(x: center.x - hubRadius, y: center.y - hubRadius, width: hubRadius * 2, height: hubRadius * 2))
-        NSColor(calibratedWhite: 0.08, alpha: 0.96).setFill()
+        tile.setFill()
         hub.fill()
-        NSColor.white.withAlphaComponent(0.12).setStroke()
+        hub.lineWidth = 1
+        edge.setStroke()
         hub.stroke()
 
         if let message {
             let para = NSMutableParagraphStyle(); para.alignment = .center
             NSAttributedString(string: message, attributes: [
                 .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-                .foregroundColor: NSColor.white.withAlphaComponent(0.8), .paragraphStyle: para,
+                .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: para,
             ]).draw(in: NSRect(x: center.x - 46, y: center.y - 18, width: 92, height: 36))
             return
         }
@@ -426,11 +479,11 @@ final class WheelView: NSView {
         para.lineBreakMode = .byTruncatingMiddle
         NSAttributedString(string: modeTitle, attributes: [
             .font: NSFont.systemFont(ofSize: 11, weight: .bold),
-            .foregroundColor: NSColor.white, .paragraphStyle: para,
+            .foregroundColor: NSColor.labelColor, .paragraphStyle: para,
         ]).draw(in: NSRect(x: center.x - 44, y: center.y - 16, width: 88, height: 15))
         NSAttributedString(string: fileLabel, attributes: [
             .font: NSFont.systemFont(ofSize: 8.5, weight: .regular),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.55), .paragraphStyle: para,
+            .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: para,
         ]).draw(in: NSRect(x: center.x - 44, y: center.y - 30, width: 88, height: 12))
     }
 

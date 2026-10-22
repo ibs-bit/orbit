@@ -18,10 +18,27 @@ enum DocumentEngine {
             return NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 12)])
         case "textclipping":
             return NSAttributedString(string: try readTextClipping(url))
+        case "html", "htm":
+            return try offlineHTML(try String(contentsOf: url))
         default:
             var attrs: NSDictionary?
             return try NSAttributedString(url: url, options: [:], documentAttributes: &attrs)
         }
+    }
+
+    /// Parses HTML with every remote reference removed, so importing a file never touches the network.
+    static func offlineHTML(_ html: String) throws -> NSAttributedString {
+        var cleaned = html
+        for tag in ["script", "style", "iframe", "object", "embed", "video", "audio", "form"] {
+            cleaned = cleaned.replacingOccurrences(of: "(?is)<\(tag)\\b.*?</\(tag)\\s*>", with: "", options: .regularExpression)
+        }
+        cleaned = cleaned.replacingOccurrences(of: "(?is)<(link|meta|img|source|base)\\b[^>]*>", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)\\s(src|href|srcset|background|poster|data)\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)url\\s*\\([^)]*\\)", with: "none", options: .regularExpression)
+        guard let data = cleaned.data(using: .utf8) else { throw OrbitError("Could not read HTML.") }
+        return try NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.html,
+                                                            .characterEncoding: String.Encoding.utf8.rawValue],
+                                      documentAttributes: nil)
     }
 
     static func readTextClipping(_ url: URL) throws -> String {
@@ -166,7 +183,7 @@ enum DocumentEngine {
 
     static func pandoc(_ input: URL, to output: URL, extra: [String] = []) throws {
         guard let exe = Backends.path(for: .pandoc) else { throw MissingBackendError(backend: .pandoc) }
-        var args = [input.path, "-o", output.path, "--standalone"] + extra
+        var args = [input.path, "-o", output.path, "--standalone", "--sandbox"] + extra
         if output.pathExtension.lowercased() == "md" { args += ["-t", "gfm", "--wrap=none"] }
         try runProcess(exe, args)
     }
