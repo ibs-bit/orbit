@@ -44,13 +44,19 @@ one shows the install command.
 Requires macOS 14+ and Xcode 15+ (Swift 5.9).
 
 ```bash
-scripts/package_app.sh      # → dist/Orbit.app and a zip
-open dist/Orbit.app
+scripts/package_app.sh --install   # → dist/Orbit.app, copied to /Applications and launched
 ```
 
 Orbit lives in the menu bar. The first launch asks for **Accessibility** access, which
-macOS requires to see modifier keys during a drag. Grant it in
-System Settings → Privacy & Security → Accessibility, then relaunch.
+macOS requires to see modifier keys during a drag. Turn Orbit on in
+System Settings → Privacy & Security → Accessibility; the app picks it up within a couple
+of seconds without a relaunch.
+
+The bundle is ad-hoc signed, so its identity changes on every build. macOS ties the
+Accessibility grant to that identity, which is why `--install` clears the old grant: after
+each rebuild, approve Orbit again. If the app ever fails to appear when added with the "+"
+button, run `tccutil reset Accessibility com.ibsbit.Orbit` and launch it again from
+/Applications; the prompt adds it to the list itself.
 
 For development:
 

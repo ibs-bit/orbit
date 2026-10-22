@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Builds Orbit with SwiftPM and wraps it into dist/Orbit.app (ad-hoc signed).
+#
+#   scripts/package_app.sh            build dist/Orbit.app and a zip
+#   scripts/package_app.sh --install  …then copy it to /Applications, clear the old
+#                                     Accessibility grant (the ad-hoc signature changes on
+#                                     every build, so macOS needs to re-approve) and relaunch
 set -euo pipefail
 
 APP_NAME="Orbit"
@@ -70,3 +75,15 @@ rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 echo "✅ $APP"
 echo "   $ZIP"
+
+if [[ "${1:-}" == "--install" ]]; then
+  echo "==> Installing to /Applications…"
+  pkill -x "$APP_NAME" 2>/dev/null || true
+  sleep 0.3
+  rm -rf "/Applications/$APP_NAME.app"
+  ditto "$APP" "/Applications/$APP_NAME.app"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/$APP_NAME.app"
+  tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
+  open "/Applications/$APP_NAME.app"
+  echo "✅ /Applications/$APP_NAME.app launched — approve it in System Settings → Privacy & Security → Accessibility"
+fi
