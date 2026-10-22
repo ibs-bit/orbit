@@ -26,9 +26,10 @@ enum DocumentEngine {
         }
     }
 
-    /// Parses HTML without ever touching the network.
-    /// Prefers pandoc's sandbox (no file or network access); otherwise strips every remote
-    /// reference before handing the markup to the system parser.
+    /// Imports HTML without ever handing untrusted markup to a network-capable parser.
+    /// With pandoc installed the file is converted inside pandoc's sandbox (no file or network
+    /// access). Otherwise the markup is reduced to plain text; formatting is lost but nothing
+    /// can be fetched.
     static func offlineHTML(_ html: String) throws -> NSAttributedString {
         if Backends.isAvailable(.pandoc) {
             let tmp = try OutputPaths.temporaryDirectory()
@@ -38,26 +39,24 @@ enum DocumentEngine {
             defer { try? FileManager.default.removeItem(at: tmp) }
             return try NSAttributedString(url: output, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
         }
-        return try NSAttributedString(data: Data(sanitizedHTML(html).utf8),
-                                      options: [.documentType: NSAttributedString.DocumentType.html,
-                                                .characterEncoding: String.Encoding.utf8.rawValue],
-                                      documentAttributes: nil)
+        return NSAttributedString(string: plainText(fromHTML: html), attributes: [.font: NSFont.systemFont(ofSize: 12)])
     }
 
-    /// Best-effort removal of anything that could trigger a load: active content, resource tags,
-    /// URL-bearing attributes (also after `/`), CSS url() and @import, and unclosed tags.
-    static func sanitizedHTML(_ html: String) -> String {
-        var cleaned = html
-        for tag in ["script", "style", "iframe", "object", "embed", "video", "audio", "form", "svg", "math", "template", "noscript"] {
-            cleaned = cleaned.replacingOccurrences(of: "(?is)<\\s*\(tag)\\b.*?(?:</\\s*\(tag)\\s*>|\\z)", with: "", options: .regularExpression)
+    /// Strips tags and active content, keeping paragraph breaks and decoding common entities.
+    static func plainText(fromHTML html: String) -> String {
+        var text = html
+        for tag in ["script", "style", "template", "noscript", "iframe", "object", "svg", "math"] {
+            text = text.replacingOccurrences(of: "(?is)<\\s*\(tag)\\b.*?(?:</\\s*\(tag)\\s*>|\\z)", with: "", options: .regularExpression)
         }
-        cleaned = cleaned.replacingOccurrences(of: "(?is)<\\s*(link|meta|img|source|base|track|input|picture|frame|applet|portal)\\b[^>]*(?:>|\\z)", with: "", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: "(?is)[\\s/\"']+(src|href|srcset|background|poster|data|action|formaction|ping|cite|longdesc|usemap|xlink:href|manifest|icon|lowsrc)\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]*)", with: " ", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: "(?is)@import[^;\"']*[\"']?[^;]*;?", with: "", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: "(?is)url\\s*\\([^)]*\\)?", with: "none", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: "(?is)<!--.*?(?:-->|\\z)", with: "", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: "(?i)https?://", with: "blocked://", options: .regularExpression)
-        return cleaned
+        text = text.replacingOccurrences(of: "(?is)<!--.*?(?:-->|\\z)", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?i)<\\s*(br|/p|/div|/h[1-6]|/li|/tr|/blockquote|/pre)\\b[^>]*>", with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?is)<[^>]*(?:>|\\z)", with: "", options: .regularExpression)
+        let entities = ["&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'"]
+        for (k, v) in entities { text = text.replacingOccurrences(of: k, with: v) }
+        text = text.replacingOccurrences(of: "&#(\\d+);", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "[ \\t]+\\n", with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func readTextClipping(_ url: URL) throws -> String {

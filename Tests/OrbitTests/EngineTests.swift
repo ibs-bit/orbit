@@ -128,27 +128,18 @@ final class EngineTests: XCTestCase {
     func testHTMLImportIsOffline() throws {
         let html = """
         <html><head><link rel=stylesheet href="http://evil.test/a.css"><script>alert(1)</script></head>
-        <body><h1>Hi</h1><img src="http://evil.test/x.png"><p style="background:url(http://evil.test/b.png)">Body <a href="http://evil.test">link</a></p></body></html>
+        <body><h1>Hi</h1><img src="http://evil.test/x.png"><p style="background:url(http://evil.test/b.png)">Body &amp; more</p>
+        <img/src="http://evil.test/p.png"><style>@import 'http://evil.test/a.css';</style><script>fetch('http://evil.test')
         """
         let parsed = try DocumentEngine.offlineHTML(html)
         XCTAssertTrue(parsed.string.contains("Hi"))
         XCTAssertTrue(parsed.string.contains("Body"))
         XCTAssertFalse(parsed.string.contains("alert"))
-        // A hyperlink attribute is inert; what matters is that nothing was fetched and no script survived.
-        if !Backends.isAvailable(.pandoc) {
-            var hasLink = false
-            parsed.enumerateAttribute(.link, in: NSRange(location: 0, length: parsed.length)) { v, _, _ in if v != nil { hasLink = true } }
-            XCTAssertFalse(hasLink)
-        }
+        XCTAssertFalse(parsed.string.contains("evil.test"))
 
-        // The regex fallback must survive parser tricks: unclosed tags, `/` before attributes, @import.
-        let tricky = "<p>Keep</p><img/src=\"http://evil.test/p.png\"><style>@import 'http://evil.test/a.css'; p{background:url(http://evil.test/b.png)}</style><a href='http://evil.test'>x</a><script>fetch('http://evil.test')"
-        let out = DocumentEngine.sanitizedHTML(tricky)
-        XCTAssertFalse(out.contains("evil.test"), out)
-        XCTAssertFalse(out.contains("http://"), out)
-        XCTAssertFalse(out.contains("@import"), out)
-        XCTAssertFalse(out.contains("fetch"), out)
-        XCTAssertTrue(out.contains("Keep"))
+        // The no-pandoc path keeps text and paragraph breaks only.
+        let plain = DocumentEngine.plainText(fromHTML: html)
+        XCTAssertEqual(plain, "Hi\nBody & more")
     }
 
     func testEscapingSymlinksAreRemovedAfterExtraction() throws {
