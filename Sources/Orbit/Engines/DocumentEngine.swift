@@ -26,19 +26,38 @@ enum DocumentEngine {
         }
     }
 
-    /// Parses HTML with every remote reference removed, so importing a file never touches the network.
+    /// Parses HTML without ever touching the network.
+    /// Prefers pandoc's sandbox (no file or network access); otherwise strips every remote
+    /// reference before handing the markup to the system parser.
     static func offlineHTML(_ html: String) throws -> NSAttributedString {
-        var cleaned = html
-        for tag in ["script", "style", "iframe", "object", "embed", "video", "audio", "form"] {
-            cleaned = cleaned.replacingOccurrences(of: "(?is)<\(tag)\\b.*?</\(tag)\\s*>", with: "", options: .regularExpression)
+        if Backends.isAvailable(.pandoc) {
+            let tmp = try OutputPaths.temporaryDirectory()
+            let input = tmp.appendingPathComponent("in.html"), output = tmp.appendingPathComponent("out.rtf")
+            try html.write(to: input, atomically: true, encoding: .utf8)
+            try pandoc(input, to: output)
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            return try NSAttributedString(url: output, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
         }
-        cleaned = cleaned.replacingOccurrences(of: "(?is)<(link|meta|img|source|base)\\b[^>]*>", with: "", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: "(?i)\\s(src|href|srcset|background|poster|data)\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)", with: "", options: .regularExpression)
-        cleaned = cleaned.replacingOccurrences(of: "(?i)url\\s*\\([^)]*\\)", with: "none", options: .regularExpression)
-        guard let data = cleaned.data(using: .utf8) else { throw OrbitError("Could not read HTML.") }
-        return try NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.html,
-                                                            .characterEncoding: String.Encoding.utf8.rawValue],
+        return try NSAttributedString(data: Data(sanitizedHTML(html).utf8),
+                                      options: [.documentType: NSAttributedString.DocumentType.html,
+                                                .characterEncoding: String.Encoding.utf8.rawValue],
                                       documentAttributes: nil)
+    }
+
+    /// Best-effort removal of anything that could trigger a load: active content, resource tags,
+    /// URL-bearing attributes (also after `/`), CSS url() and @import, and unclosed tags.
+    static func sanitizedHTML(_ html: String) -> String {
+        var cleaned = html
+        for tag in ["script", "style", "iframe", "object", "embed", "video", "audio", "form", "svg", "math", "template", "noscript"] {
+            cleaned = cleaned.replacingOccurrences(of: "(?is)<\\s*\(tag)\\b.*?(?:</\\s*\(tag)\\s*>|\\z)", with: "", options: .regularExpression)
+        }
+        cleaned = cleaned.replacingOccurrences(of: "(?is)<\\s*(link|meta|img|source|base|track|input|picture|frame|applet|portal)\\b[^>]*(?:>|\\z)", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?is)[\\s/\"']+(src|href|srcset|background|poster|data|action|formaction|ping|cite|longdesc|usemap|xlink:href|manifest|icon|lowsrc)\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]*)", with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?is)@import[^;\"']*[\"']?[^;]*;?", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?is)url\\s*\\([^)]*\\)?", with: "none", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?is)<!--.*?(?:-->|\\z)", with: "", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)https?://", with: "blocked://", options: .regularExpression)
+        return cleaned
     }
 
     static func readTextClipping(_ url: URL) throws -> String {

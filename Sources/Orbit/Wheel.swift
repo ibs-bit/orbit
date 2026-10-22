@@ -396,21 +396,43 @@ final class WheelView: NSView {
     private func drawGloss(index i: Int, outer: CGFloat, color: NSColor) {
         let a0 = CGFloat(i) * step + gapDegrees / 2
         let a1 = CGFloat(i + 1) * step - gapDegrees / 2
+        NSGraphicsContext.saveGraphicsState()
+        segmentPath(index: i, inner: innerRadius, outer: outer).addClip()
         let arc = NSBezierPath()
         arc.appendArc(withCenter: center, radius: outer - 0.75, startAngle: 90 - a0, endAngle: 90 - a1, clockwise: true)
         arc.lineWidth = 1.5
         color.setStroke()
         arc.stroke()
+        NSGraphicsContext.restoreGraphicsState()
     }
 
+    private let cornerRadius: CGFloat = 9
+
+    /// An annular sector with all four corners rounded.
     private func segmentPath(index i: Int, inner: CGFloat, outer: CGFloat) -> NSBezierPath {
+        let r = min(cornerRadius, (outer - inner) / 2 - 1)
         let a0 = CGFloat(i) * step + gapDegrees / 2
         let a1 = CGFloat(i + 1) * step - gapDegrees / 2
-        let path = NSBezierPath()
-        path.appendArc(withCenter: center, radius: outer, startAngle: 90 - a0, endAngle: 90 - a1, clockwise: true)
-        path.appendArc(withCenter: center, radius: inner, startAngle: 90 - a1, endAngle: 90 - a0, clockwise: false)
-        path.close()
-        return path
+        let ri = inner + r, ro = outer - r
+        // Shrink the sector by r on every side, then grow it back with a round-joined stroke.
+        let shrinkOuter = asin(min(1, r / ro)) * 180 / .pi
+        let shrinkInner = asin(min(1, r / ri)) * 180 / .pi
+        let core = CGMutablePath()
+        func pt(_ deg: CGFloat, _ rad: CGFloat) -> CGPoint {
+            let t = deg * .pi / 180
+            return CGPoint(x: center.x + sin(t) * rad, y: center.y + cos(t) * rad)
+        }
+        let mid = (a0 + a1) / 2
+        let o0 = min(a0 + shrinkOuter, mid - 0.01), o1 = max(a1 - shrinkOuter, mid + 0.01)
+        let i0 = min(a0 + shrinkInner, mid - 0.01), i1 = max(a1 - shrinkInner, mid + 0.01)
+        core.move(to: pt(o0, ro))
+        core.addArc(center: center, radius: ro, startAngle: (90 - o0) * .pi / 180, endAngle: (90 - o1) * .pi / 180, clockwise: true)
+        core.addLine(to: pt(i1, ri))
+        core.addArc(center: center, radius: ri, startAngle: (90 - i1) * .pi / 180, endAngle: (90 - i0) * .pi / 180, clockwise: false)
+        core.closeSubpath()
+        let grown = core.copy(strokingWithWidth: r * 2, lineCap: .round, lineJoin: .round, miterLimit: 1)
+        let rounded = core.union(grown)
+        return NSBezierPath(cgPath: rounded)
     }
 
     private func drawLabel(_ item: WheelItem, index i: Int, hovered: Bool) {
