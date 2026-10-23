@@ -183,12 +183,14 @@ final class WheelController {
     }
 
     /// Performs whatever the pointer is over. Returns false if nothing actionable is hovered.
+    /// `dropped` are the URLs read from the drop itself; they're preferred over the ones seen
+    /// during the drag because only they carry access to Desktop / Documents / Downloads.
     @discardableResult
-    func performHovered() -> Bool {
+    func performHovered(dropped: [URL] = []) -> Bool {
         guard isVisible, let view, let index = view.hovered, index < visibleItems.count else { hide(); return false }
         let item = visibleItems[index]
         if case .more = item { nextPage(); return true }
-        let files = self.files
+        let files = dropped.isEmpty ? self.files : dropped
         hide()
         onPerform?(item, files)
         return true
@@ -534,7 +536,11 @@ final class WheelView: NSView {
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { hovered != nil }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         _ = track(sender)
-        return controller?.performHovered() ?? false
+        // Reading the drop's own pasteboard is what grants access to files in protected
+        // folders; without it AirDrop refuses them and other tools hit a privacy prompt.
+        let dropped = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        return controller?.performHovered(dropped: dropped) ?? false
     }
     override func draggingEnded(_ sender: NSDraggingInfo) { controller?.hide() }
 }
